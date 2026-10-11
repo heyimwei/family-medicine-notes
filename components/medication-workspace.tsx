@@ -150,7 +150,18 @@ export default function MedicationWorkspace({ demoMode, user }: WorkspaceProps) 
     setAdminCreateMessage("");
     try {
       const response = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: form.get("displayName"), email: form.get("email"), password: form.get("password") }) });
-      if (!response.ok) throw new Error("USER_CREATE_FAILED");
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) {
+        if (body?.error === "EMAIL_ALREADY_EXISTS") {
+          setAdminCreateMessage("此電子郵件已有帳號。請改用另一個 Email，或使用既有帳號登入。\n");
+          return;
+        }
+        if (body?.error === "INVALID_USER_REQUEST") {
+          setAdminCreateMessage("請確認顯示名稱、Email 格式與至少 12 碼的初始密碼。\n");
+          return;
+        }
+        throw new Error(body?.error ?? "USER_CREATE_FAILED");
+      }
       event.currentTarget.reset();
       setAdminCreateMessage("帳號已建立。請以安全方式把初始密碼交給長輩，並提醒他登入後可自行修改。\n");
     } catch { setAdminCreateMessage("帳號建立失敗。請檢查電子郵件是否重複、密碼是否至少 12 碼，或聯絡系統管理員。\n"); }

@@ -10,7 +10,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "INVALID_USER_REQUEST" }, { status: 400 });
   const database = createSupabaseAdminClient();
   const { data, error } = await database.auth.admin.createUser({ email: parsed.data.email, password: parsed.data.password, email_confirm: true });
-  if (error || !data.user) return NextResponse.json({ error: "USER_CREATE_FAILED" }, { status: 409 });
+  if (error || !data.user) {
+    const isDuplicateEmail = error?.code === "email_exists" || /already (?:been )?(?:registered|exists)/i.test(error?.message ?? "");
+    return NextResponse.json(
+      { error: isDuplicateEmail ? "EMAIL_ALREADY_EXISTS" : "USER_CREATE_FAILED" },
+      { status: isDuplicateEmail ? 409 : 502 },
+    );
+  }
   const { error: profileError } = await database.from("profiles").insert({ id: data.user.id, role: "USER", display_name: parsed.data.displayName });
   if (profileError) {
     await database.auth.admin.deleteUser(data.user.id);
