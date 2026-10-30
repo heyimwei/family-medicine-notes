@@ -1,0 +1,119 @@
+openapi: 3.1.0
+info:
+  title: 安心用藥紀錄 API
+  version: 1.0.0-draft
+  description: |
+    僅限已登入且由管理員啟用的家人帳號。所有 response 均由 server
+    驗證 session、角色與 owner scope；AI 擷取結果永遠是待確認草稿。
+servers:
+  - url: /api
+paths:
+  /uploads/presign:
+    post:
+      summary: 建立私有圖片上傳授權
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 短效上傳 URL；不可作為讀取 URL }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /extractions:
+    post:
+      summary: 對 caller 或管理員指定 owner 的圖片建立擷取草稿
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 每張圖片的 job 與候選草稿；不建立正式紀錄 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { description: 擷取失敗；job 狀態為 FAILED，使用者可重試或手動輸入 }
+  /extractions/{id}:
+    get:
+      summary: 讀取 caller 擁有或管理員獲授權的擷取草稿
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { description: 草稿與讀不清區域；不是正式處方 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /prescriptions/confirm:
+    post:
+      summary: 原子確認並建立正式用藥紀錄
+      description: |
+        要求 Idempotency-Key。server 在同一交易中驗證 caller、target owner、圖片、項目與 reference，
+        寫入 encounter/prescription/items/image links/audit log；不得信任 client 傳來的角色、owner 或 reference 有效性。
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201': { description: 正式 CONFIRMED 處方 ID }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 重複 key 回傳既有結果或與已完成請求衝突 }
+  /medications:
+    get:
+      summary: 列出正式用藥紀錄
+      description: USER 只取得自己的 confirmed、未 soft-delete 項目；ADMIN 必須提供已驗證 target owner 才可代查。
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 正式項目、處方、就診脈絡、官方來源狀態與安全聲明 }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /images/{id}/view:
+    post:
+      summary: 核發授權範圍內的短效圖片讀取 URL
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { description: 短效 signed read URL，並已寫入 IMAGE_VIEWED 稽核 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/users:
+    post:
+      summary: 建立長輩帳號與 USER profile
+      security: [{ sessionCookie: [] }]
+      responses:
+        '201': { description: 帳號已建立；回應不得含初始密碼 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: EMAIL_ALREADY_EXISTS }
+  /admin/users/{id}:
+    patch:
+      summary: 管理員停用/啟用帳號或協助重設密碼
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { description: 操作完成並記錄 audit log }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/records/{type}/{id}:
+    delete:
+      summary: 管理員受控 soft delete 記錄或圖片
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema: { type: string, enum: [encounter, prescription, image] }
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '204': { description: 已 soft delete 並寫入 audit log }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/audit-logs:
+    get:
+      summary: 管理員查看稽核紀錄
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 含 actor、timestamp、action、entity target 與安全摘要的分頁資料 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: sb-access-token }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    InvalidRequest:
+      description: INVALID_*；輸入格式或欄位不符 contract
+    Unauthenticated:
+      description: UNAUTHENTICATED；沒有有效且啟用的 session/profile
+    Forbidden:
+      description: FORBIDDEN 或 *_OWNERSHIP_INVALID；caller 不具有資源權限
